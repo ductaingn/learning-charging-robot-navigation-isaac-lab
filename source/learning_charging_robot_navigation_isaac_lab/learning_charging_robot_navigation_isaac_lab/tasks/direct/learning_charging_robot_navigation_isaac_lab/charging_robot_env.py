@@ -12,7 +12,6 @@ from .charging_robot_env_cfg import ChargingRobotEnvCfg
 from isaaclab.sensors.ray_caster import RayCaster
 
 from isaacsim.core.utils.extensions import enable_extension
-from isaacsim.exts
 # import omni.graph.core as og
 
 enable_extension("isaacsim.ros2.bridge")
