@@ -11,6 +11,14 @@ from isaaclab.utils import configclass
 from .charging_robot_env_cfg import ChargingRobotEnvCfg
 from isaaclab.sensors.ray_caster import RayCaster
 
+from isaacsim.core.utils.extensions import enable_extension
+from isaacsim.exts
+# import omni.graph.core as og
+
+enable_extension("isaacsim.ros2.bridge")
+enable_extension("omni.graph.bundle.action")
+
+
 class ChargingRobotEnv(DirectRLEnv):
     cfg: ChargingRobotEnvCfg
 
@@ -61,7 +69,6 @@ class ChargingRobotEnv(DirectRLEnv):
 
         # Setup rest of the scene
         self.leatherback = Articulation(self.cfg.robot_cfg)
-        self.lidar = RayCaster(self.cfg.lidar_cfg)
         self.object_state = []
         
         self.scene.clone_environments(copy_from_source=False)
@@ -95,9 +102,6 @@ class ChargingRobotEnv(DirectRLEnv):
         self._position_error_vector = current_target_positions - self.leatherback.data.root_pos_w[:, :2]
         self._previous_position_error = self._position_error.clone()
         self._position_error = torch.norm(self._position_error_vector, dim=-1)
-        self.lidar.update(dt=self.physics_dt)
-        print(f"lidar data shape: {self.lidar.data.ray_hits_w[...,-1].shape}")
-        print(self.lidar.data.ray_hits_w[...,-1])
 
         heading = self.leatherback.data.heading_w
         target_heading_w = torch.atan2(

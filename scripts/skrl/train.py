@@ -81,6 +81,8 @@ if version.parse(skrl.__version__) < version.parse(SKRL_VERSION):
 
 if args_cli.ml_framework.startswith("torch"):
     from skrl.utils.runner.torch import Runner
+    from skrl.trainers.torch import ParallelTrainer, SequentialTrainer
+    from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
 elif args_cli.ml_framework.startswith("jax"):
     from skrl.utils.runner.jax import Runner
 
@@ -101,6 +103,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import learning_charging_robot_navigation_isaac_lab.tasks  # noqa: F401
+from architectures import StochasticActor, Critic
 
 # config shortcuts
 algorithm = args_cli.algorithm.lower()
@@ -143,17 +146,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     print(f"Exact experiment name requested from command line {log_dir}")
     if agent_cfg["agent"]["experiment"]["experiment_name"]:
         log_dir += f'_{agent_cfg["agent"]["experiment"]["experiment_name"]}'
+
+    cfg = SAC_DEFAULT_CONFIG.copy()
+    cfg["discount_factor"] = agent_cfg["agent"]["discount_factor"]
+    cfg["batch_size"] = agent_cfg["agent"]["mini_batches"]
+    cfg["random_timesteps"] = agent_cfg["agent"]["random_timesteps"]
+    cfg["learning_starts"] = agent_cfg["agent"]["learning_starts"]
+    cfg["learn_entropy"] = True
+    # logging to TensorBoard and write checkpoints (in timesteps)
+    cfg["experiment"]["write_interval"] = agent_cfg["agent"]["experiment"]["write_interval"]
+    cfg["experiment"]["checkpoint_interval"] = agent_cfg["agent"]["experiment"]["checkpoint_interval"]
     # set directory into agent config
-    agent_cfg["agent"]["experiment"]["directory"] = log_root_path
-    agent_cfg["agent"]["experiment"]["experiment_name"] = log_dir
+    cfg["experiment"]["directory"] = log_root_path
+    cfg["experiment"]["experiment_name"] = log_dir
+
     # update log_dir
     log_dir = os.path.join(log_root_path, log_dir)
-
-    # dump the configuration into log-directory
-    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # get checkpoint path (to resume training)
     resume_path = retrieve_file_path(args_cli.checkpoint) if args_cli.checkpoint else None
@@ -180,17 +188,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap around environment for skrl
     env = SkrlVecEnvWrapper(env, ml_framework=args_cli.ml_framework)  # same as: `wrap_env(env, wrapper="auto")`
 
+    # custom agent's model architecture
+    models = {}
+    models["policy"] = StochasticActor(env.observation_space, env.action_space, env.device)
+    models["critic_1"] = Critic(env.observation_space, env.action_space, env.device)
+    models["critic_2"] = Critic(env.observation_space, env.action_space, env.device)
+    models["target_critic_1"] = Critic(env.observation_space, env.action_space, env.device)
+    models["target_critic_2"] = Critic(env.observation_space, env.action_space, env.device)
+
+    agent = SAC(
+        models=models,
+        cfg=cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=env.device,
+    )
+    
+    # dump the configuration into log-directory
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+
     # configure and instantiate the skrl runner
-    # https://skrl.readthedocs.io/en/latest/api/utils/runner.html
-    runner = Runner(env, agent_cfg)
+    trainner = SequentialTrainer(env, agent)
 
     # load checkpoint (if specified)
     if resume_path:
         print(f"[INFO] Loading model checkpoint from: {resume_path}")
-        runner.agent.load(resume_path)
-
+        trainner.agents.load(resume_path)
     # run training
-    runner.run()
+    trainner.train()
 
     # close the simulator
     env.close()
